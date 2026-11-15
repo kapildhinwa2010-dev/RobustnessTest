@@ -2,10 +2,13 @@ import numpy as np
 import pytest
 
 from robustnesstest import (
+    add_noise,
     benchmark,
     fourier_compress,
     hybrid_compress,
+    noise_sweep,
     quantize,
+    robustness_report,
     svd_compress,
 )
 
@@ -71,3 +74,45 @@ def test_benchmark_rejects_1d():
 def test_benchmark_low_error_for_smooth():
     results = benchmark(_smooth(rows=32, cols=128))
     assert all(r["relative_error"] < 0.5 for r in results)
+
+
+# --- noise-robustness (RobustnessTest-specific) ---
+
+
+def test_add_noise_zero_is_copy():
+    A = _smooth()
+    noisy = add_noise(A, 0.0, np.random.default_rng(0))
+    assert np.array_equal(noisy, A)
+
+
+def test_add_noise_rejects_negative_sigma():
+    with pytest.raises(ValueError):
+        add_noise(np.eye(4), -0.1, np.random.default_rng(0))
+
+
+def test_noise_sweep_zero_sigma_matches_benchmark():
+    A = _smooth()
+    sweep = noise_sweep(A, [0.0])
+    bench = {r["method"]: r["relative_error"] for r in benchmark(A)}
+    for name, rows in sweep.items():
+        assert rows[0]["relative_error"] == pytest.approx(bench[name])
+
+
+def test_svd_error_grows_with_noise():
+    A = _smooth()
+    sweep = noise_sweep(A, [0.0, 0.05, 0.2])
+    errs = [r["relative_error"] for r in sweep["svd_rank4"]]
+    assert errs[2] > errs[0]
+
+
+def test_noise_sweep_rejects_empty():
+    with pytest.raises(ValueError):
+        noise_sweep(_smooth(), [])
+
+
+def test_robustness_report_has_most_robust():
+    report = robustness_report(_smooth())
+    assert report["most_robust"] in {"svd_rank4", "quantize8", "fourier4", "hybrid"}
+    for name, entry in report["methods"].items():
+        assert entry["degradation"] >= -1e-12
+        assert entry["baseline_error"] >= 0.0
